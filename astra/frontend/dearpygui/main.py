@@ -20,6 +20,12 @@ class AstraApp:
             with dpg.group(tag="content_group"):
                 pass
 
+            dpg.add_spacer(height=10)
+            dpg.add_separator()
+            with dpg.group(horizontal=True):
+                dpg.add_text("Status:")
+                dpg.add_text("Ready", tag="global_status", color=(0, 255, 0))
+
             dpg.add_separator()
             with dpg.collapsing_header(label="Debug Console", default_open=False):
                 dpg.add_input_text(multiline=True, readonly=True, tag="debug_console", width=-1, height=150)

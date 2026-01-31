@@ -35,6 +35,8 @@ class DashboardUI:
         with dpg.group(horizontal=True):
             dpg.add_text(f"Total Income: {summary.get('total_income', 0):.2f}")
             dpg.add_button(label="Refresh", callback=lambda: self.show(parent=self._parent))
+            with dpg.tooltip(dpg.last_item()):
+                dpg.add_text("Reload data from the backend and refresh all tabs.")
 
         dpg.add_text(f"Total Spent: {summary.get('total_spent', 0):.2f}")
 
@@ -42,8 +44,14 @@ class DashboardUI:
         """Render the transactions table and import controls."""
         with dpg.group():
             with dpg.group(horizontal=True):
-                dpg.add_input_text(label="File Path", tag="import_path", width=300)
-                dpg.add_button(label="Import", callback=self._import_callback)
+                dpg.add_input_text(label="File Path", tag="import_path", width=300, callback=self._update_import_button_state)
+                dpg.add_button(label="Import", tag="import_button", callback=self._import_callback, enabled=False)
+                with dpg.tooltip(dpg.last_item()):
+                    dpg.add_text("Import transactions from CSV, Excel, or Text file. Path must not be empty.")
+
+                dpg.add_loading_indicator(tag="import_spinner", show=False, radius=2)
+                dpg.add_text("", tag="import_status")
+
             dpg.add_separator()
 
             txs = self.api.get_transactions()
@@ -68,6 +76,8 @@ class DashboardUI:
                             with dpg.group(horizontal=True):
                                 dpg.add_text(f"{tx.category} ({tx.confidence:.1%})")
                                 dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
+                                with dpg.tooltip(dpg.last_item()):
+                                    dpg.add_text("Confirm this category prediction to update the ML model.")
 
     def _render_charts(self):
         """Render charts using aggregated spending data."""
@@ -92,9 +102,17 @@ class DashboardUI:
 
     def _render_settings(self):
         dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme)
+        with dpg.tooltip(dpg.last_item()):
+            dpg.add_text("Switch between light and dark UI themes.")
+
         dpg.add_button(label="Manual Model Retrain", callback=self._retrain_callback)
+        with dpg.tooltip(dpg.last_item()):
+            dpg.add_text("Force the ML model to retrain using all confirmed transactions.")
+
         dpg.add_separator()
         dpg.add_button(label="Logout", callback=self.on_logout)
+        with dpg.tooltip(dpg.last_item()):
+            dpg.add_text("Sign out and return to the login screen.")
 
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
@@ -117,21 +135,65 @@ class DashboardUI:
 
     def _retrain_callback(self):
         logger.info("Manual retraining triggered")
-        user_id = self.api.get_current_user().id
-        txs = self.api.get_transactions()
-        self.api.ml_engines[user_id].train(txs)
-        logger.info("Model retrained successfully")
+        self._update_global_status("Retraining model...", color=(255, 255, 0))
+        try:
+            user_id = self.api.get_current_user().id
+            txs = self.api.get_transactions()
+            self.api.ml_engines[user_id].train(txs)
+            logger.info("Model retrained successfully")
+            self._update_global_status("Model retrained", color=(0, 255, 0))
+        except Exception as e:
+            logger.error(f"Retrain failed: {e}")
+            self._update_global_status("Retrain failed", color=(255, 0, 0))
 
     def _confirm_callback(self, tx):
         """Callback to confirm a transaction's category."""
-        self.api.confirm_transaction(tx.id, tx.category)
-        logger.info(f"Confirmed transaction {tx.id} as {tx.category}")
-        self.show(parent=self._parent)
+        self._update_global_status(f"Confirming {tx.id}...", color=(255, 255, 0))
+        try:
+            self.api.confirm_transaction(tx.id, tx.category)
+            logger.info(f"Confirmed transaction {tx.id} as {tx.category}")
+            self._update_global_status(f"Confirmed: {tx.category}", color=(0, 255, 0))
+            self.show(parent=self._parent)
+        except Exception as e:
+            logger.error(f"Confirmation failed: {e}")
+            self._update_global_status("Confirmation failed", color=(255, 0, 0))
+
+    def _update_global_status(self, message, color=(0, 255, 0)):
+        """Update the global status label in the main window."""
+        if dpg.does_item_exist("global_status"):
+            dpg.set_value("global_status", message)
+            dpg.configure_item("global_status", color=color)
+
+    def _update_import_button_state(self):
+        """Enable or disable the import button based on input path."""
+        path = dpg.get_value("import_path")
+        dpg.configure_item("import_button", enabled=bool(path.strip()))
 
     def _import_callback(self):
         """Callback to import transactions from a file path."""
         path = dpg.get_value("import_path")
-        if path:
-            logger.info(f"Importing transactions from {path}")
+        if not path:
+            return
+
+        logger.info(f"Importing transactions from {path}")
+        dpg.configure_item("import_spinner", show=True)
+        dpg.set_value("import_status", "Importing...")
+        self._update_global_status("Import in progress...", color=(255, 255, 0))
+
+        try:
+            # Get count before to show summary
+            count_before = len(self.api.get_transactions())
             self.api.import_transactions(path)
+            count_after = len(self.api.get_transactions())
+            new_count = count_after - count_before
+
+            logger.info(f"Imported {new_count} transactions successfully")
+            self._update_global_status(f"Imported {new_count} transactions", color=(0, 255, 0))
             self.show(parent=self._parent)
+            dpg.set_value("import_status", f"Last import: {new_count} records")
+        except Exception as e:
+            logger.error(f"Import failed: {e}")
+            self._update_global_status(f"Import failed: {str(e)[:30]}...", color=(255, 0, 0))
+            dpg.set_value("import_status", "Import failed")
+        finally:
+            dpg.configure_item("import_spinner", show=False)
