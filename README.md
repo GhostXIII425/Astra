@@ -7,6 +7,7 @@ Astra is a local-first, cross-platform personal finance application built with P
 - **Security:** Passwords are hashed with `bcrypt`. Sensitive transaction data is encrypted at rest using `cryptography`.
 - **ML Categorization:** Automatic transaction categorization using a user-specific k-NN model.
 - **Multi-format Import:** Supports CSV, Excel, and plain-text bank statements.
+- **GUI Features:** Debug console, theme customization (Light/Dark mode), and hotkeys (Ctrl+R for refresh).
 
 ## Setup
 
