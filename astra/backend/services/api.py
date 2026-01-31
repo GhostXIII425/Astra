@@ -81,6 +81,7 @@ class AstraAPI:
 
     # Dashboard data
     def get_summary(self):
+        """Get a summary of spending and income."""
         if not self.auth_manager.is_authenticated():
             return {}
 
@@ -88,13 +89,20 @@ class AstraAPI:
         total_spent = sum(t.amount for t in txs if t.amount < 0)
         total_income = sum(t.amount for t in txs if t.amount > 0)
 
-        # Categorized breakdown
-        categories = {}
-        for t in txs:
-            categories[t.category] = categories.get(t.category, 0) + abs(t.amount)
-
         return {
             "total_spent": total_spent,
             "total_income": total_income,
-            "categories": categories
+            "categories": self.get_category_spending()
         }
+
+    def get_category_spending(self) -> dict:
+        """Aggregate total spending (absolute value) per category."""
+        if not self.auth_manager.is_authenticated():
+            return {}
+
+        txs = self.get_transactions()
+        categories = {}
+        for t in txs:
+            # We aggregate absolute values for the chart
+            categories[t.category] = categories.get(t.category, 0) + abs(t.amount)
+        return categories
