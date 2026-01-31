@@ -20,7 +20,7 @@ Astra is a local-first, cross-platform personal finance application built with P
 
 To start the application:
 ```bash
-python3 -m astra.frontend.dearpygui.main
+python -m astra.frontend.dearpygui.main
 ```
 
 ## Running Tests
