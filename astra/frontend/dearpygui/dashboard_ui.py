@@ -70,8 +70,8 @@ class DashboardUI:
                                 dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
 
     def _render_charts(self):
-        summary = self.api.get_summary()
-        categories = summary.get("categories", {})
+        """Render charts using aggregated spending data."""
+        categories = self.api.get_category_spending()
 
         if not categories:
             dpg.add_text("No data to display charts")
@@ -79,12 +79,16 @@ class DashboardUI:
 
         with dpg.plot(label="Spending by Category", height=400, width=-1):
             dpg.add_plot_legend()
-            dpg.add_plot_axis(dpg.mvXAxis, label="Category")
+
+            # Setup X Axis with category labels
+            x_labels = list(categories.keys())
+            x_indices = list(range(len(x_labels)))
+
+            with dpg.plot_axis(dpg.mvXAxis, label="Category"):
+                dpg.set_axis_ticks(dpg.last_item(), tuple((x_labels[i], x_indices[i]) for i in range(len(x_labels))))
+
             with dpg.plot_axis(dpg.mvYAxis, label="Amount"):
-                # Simplified bar chart
-                x = list(range(len(categories)))
-                y = list(categories.values())
-                dpg.add_bar_series(x, y, label="Spending")
+                dpg.add_bar_series(x_indices, list(categories.values()), label="Spending")
 
     def _render_settings(self):
         dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme)
@@ -105,7 +109,7 @@ class DashboardUI:
                     dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (240, 240, 240))
                     dpg.add_theme_color(dpg.mvThemeCol_Text, (0, 0, 0))
                     dpg.add_theme_color(dpg.mvThemeCol_Button, (200, 200, 200))
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHover, (180, 180, 180))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (180, 180, 180))
                     dpg.add_theme_color(dpg.mvThemeCol_Header, (170, 170, 170))
                     dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (255, 255, 255))
             dpg.bind_theme(light_theme)
