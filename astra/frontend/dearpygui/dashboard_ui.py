@@ -1,5 +1,6 @@
 import dearpygui.dearpygui as dpg
 import logging
+from astra.frontend.dearpygui.import_ui import ImportUI
 
 logger = logging.getLogger(__name__)
 
@@ -9,6 +10,7 @@ class DashboardUI:
         self.on_logout = on_logout
         self._dark_mode = True
         self._parent = "main_window"
+        self.import_ui = ImportUI(self.api, on_import_complete=lambda: self.show(parent=self._parent))
 
     def show(self, parent="main_window"):
         self._parent = parent
@@ -42,8 +44,8 @@ class DashboardUI:
         """Render the transactions table and import controls."""
         with dpg.group():
             with dpg.group(horizontal=True):
-                dpg.add_input_text(label="File Path", tag="import_path", width=300)
-                dpg.add_button(label="Import", callback=self._import_callback)
+                # Replace old file path input with an "Import" button
+                dpg.add_button(label="Import Transactions...", callback=self.import_ui.show)
             dpg.add_separator()
 
             txs = self.api.get_transactions()
@@ -127,11 +129,3 @@ class DashboardUI:
         self.api.confirm_transaction(tx.id, tx.category)
         logger.info(f"Confirmed transaction {tx.id} as {tx.category}")
         self.show(parent=self._parent)
-
-    def _import_callback(self):
-        """Callback to import transactions from a file path."""
-        path = dpg.get_value("import_path")
-        if path:
-            logger.info(f"Importing transactions from {path}")
-            self.api.import_transactions(path)
-            self.show(parent=self._parent)
