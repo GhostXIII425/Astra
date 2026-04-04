@@ -60,13 +60,6 @@ class AstraApp:
         logger.info("Application session ended, locking vault")
         self.api.db_manager.encryption = None
         self.show_unlock()
-        # Go straight to dashboard
-        self.dashboard_ui.show(parent="content_group")
-
-    def on_logout(self):
-        # In offline mode, logout might just lock the app with PIN
-        # For now, we'll just exit or log
-        logger.info("Application session ended")
 
     def _hotkey_handler(self, sender, app_data):
         if dpg.is_key_down(dpg.mvKey_Control):
@@ -74,7 +67,6 @@ class AstraApp:
                 logger.info("Hotkey triggered: Refresh")
                 if self.api.is_unlocked():
                     self.dashboard_ui.show(parent="content_group")
-                self.dashboard_ui.show(parent="content_group")
 
     def run(self):
         try:
