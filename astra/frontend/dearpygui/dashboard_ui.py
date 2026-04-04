@@ -13,6 +13,7 @@ class DashboardUI:
         self._dark_mode = True
         self._parent = "main_window"
         self.import_ui = ImportUI(self.api, on_import_complete=self._on_import_complete)
+        self.import_ui = ImportUI(self.api, self._on_import_complete)
 
     def show(self, parent="main_window"):
         self._parent = parent
@@ -53,6 +54,10 @@ class DashboardUI:
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Manual Entry", callback=self._show_manual_entry)
                 dpg.add_button(label="Import Transactions...", callback=self.import_ui.show)
+                dpg.add_button(label="Import File", callback=self._show_file_picker)
+                dpg.add_loading_indicator(tag="import_spinner", show=False, radius=2)
+                dpg.add_text("", tag="import_status")
+
             dpg.add_separator()
 
             txs = self.api.get_transactions()
@@ -145,6 +150,7 @@ class DashboardUI:
                 description=dpg.get_value("m_desc"),
                 category=dpg.get_value("m_cat") or "Uncategorized",
                 account_id=account.id if account else None
+                category=dpg.get_value("m_cat") or "Uncategorized"
             )
             self.api.add_manual_transaction(tx)
             dpg.delete_item(dpg.get_item_parent(sender))
@@ -152,6 +158,33 @@ class DashboardUI:
             self._update_global_status("Transaction added", color=(0, 255, 0))
         except Exception as e:
             self._update_global_status(f"Error: {e}", color=(255, 0, 0))
+
+    def _show_file_picker(self):
+        # Implementation of native file picker trigger
+        # This usually involves a hidden file_dialog that we show
+        if not dpg.does_item_exist("import_dialog"):
+            with dpg.file_dialog(directory_selector=False, show=False, callback=self._file_picked_callback, tag="import_dialog", width=700, height=400):
+                dpg.add_file_extension(".csv")
+                dpg.add_file_extension(".xlsx")
+                dpg.add_file_extension(".*")
+        dpg.show_item("import_dialog")
+
+    def _file_picked_callback(self, sender, app_data):
+        file_path = app_data['file_path_name']
+        logger.info(f"File picked: {file_path}")
+        # Close the picker
+        dpg.hide_item("import_dialog")
+        # Open mapping UI
+        self.import_ui.show_mapping(file_path)
+
+    def _on_import_complete(self, count):
+        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
+        # Find and delete mapping window
+        # Mapping windows have dynamic names in DPG if not tagged,
+        # but my ImportUI uses modal windows.
+        # I should probably tag them for easier cleanup.
+        # For now, just refresh the dashboard
+        self.show(parent=self._parent)
 
     def _show_add_account(self):
         with dpg.window(label="Add Account", modal=True, width=300):

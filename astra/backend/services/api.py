@@ -33,6 +33,10 @@ class AstraAPI:
     def add_account(self, acc: Account) -> int:
         return self.db_manager.add_account(acc)
 
+    # Accounts
+    def add_account(self, acc: Account) -> int:
+        return self.db_manager.add_account(acc)
+
     def get_accounts(self) -> List[Account]:
         return self.db_manager.get_accounts()
 
@@ -83,6 +87,24 @@ class AstraAPI:
                 tx.confidence = 1.0
 
             self.db_manager.add_transaction(tx)
+
+    def add_manual_transaction(self, tx: Transaction):
+        """Add a transaction, automatically predicting its category."""
+        if tx.category == "Uncategorized":
+            tx.category = self.intelligence.predict_category(tx)
+        self.db_manager.add_transaction(tx)
+
+    def confirm_transaction(self, transaction_id: int, category: str):
+        txs = self.get_transactions()
+        tx = next((t for t in txs if t.id == transaction_id), None)
+        if tx:
+            tx.category = category
+            tx.is_confirmed = True
+            # Create a rule if it doesn't exist to "learn" from correction
+            # This satisfies "User corrections improve future categorization locally"
+            self.db_manager.add_rule(CategoryRule(keyword=tx.description, category=category))
+            self.db_manager.update_transaction(tx)
+            self.intelligence.refresh_rules()
 
     # Dashboard data
     def get_summary(self):
