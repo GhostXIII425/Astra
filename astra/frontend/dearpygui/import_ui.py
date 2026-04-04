@@ -13,7 +13,7 @@ class ImportUI:
         self.selected_file = None
         self.preview_data = None
         self.columns = []
-        self.mapping = {"date": "", "description": "", "amount": "", "category": ""}
+        self.mapping = {"date": "", "description": "", "amount": "", "money_in": "", "money_out": "", "category": ""}
 
     def show(self):
         # Trigger file dialog
@@ -56,12 +56,16 @@ class ImportUI:
                     with dpg.group():
                         dpg.add_text("Date Column:")
                         dpg.add_text("Description Column:")
-                        dpg.add_text("Amount Column:")
-                        dpg.add_text("Category Column (Optional):")
+                        dpg.add_text("Single Amount Col:")
+                        dpg.add_text("OR Money In Column:")
+                        dpg.add_text("OR Money Out Column:")
+                        dpg.add_text("Category / Result Col:")
                     with dpg.group():
                         dpg.add_combo(items=items, tag="mapping_date", width=200, callback=self._update_mapping)
                         dpg.add_combo(items=items, tag="mapping_desc", width=200, callback=self._update_mapping)
                         dpg.add_combo(items=items, tag="mapping_amount", width=200, callback=self._update_mapping)
+                        dpg.add_combo(items=items, tag="mapping_in", width=200, callback=self._update_mapping)
+                        dpg.add_combo(items=items, tag="mapping_out", width=200, callback=self._update_mapping)
                         dpg.add_combo(items=items, tag="mapping_cat", width=200, callback=self._update_mapping)
 
                 dpg.add_input_text(label="Date Format (e.g. %Y-%m-%d)", tag="import_date_format", default_value="%Y-%m-%d")
@@ -97,7 +101,9 @@ class ImportUI:
         dpg.set_value("mapping_date", find_match(['date', 'time']))
         dpg.set_value("mapping_desc", find_match(['desc', 'memo', 'details', 'payee']))
         dpg.set_value("mapping_amount", find_match(['amount', 'value', 'total']))
-        dpg.set_value("mapping_cat", find_match(['cat', 'type']))
+        dpg.set_value("mapping_in", find_match(['credit', 'in', 'deposit']))
+        dpg.set_value("mapping_out", find_match(['debit', 'out', 'withdrawal']))
+        dpg.set_value("mapping_cat", find_match(['cat', 'type', 'result']))
 
         self._update_mapping()
 
@@ -105,6 +111,8 @@ class ImportUI:
         self.mapping["date"] = dpg.get_value("mapping_date")
         self.mapping["description"] = dpg.get_value("mapping_desc")
         self.mapping["amount"] = dpg.get_value("mapping_amount")
+        self.mapping["money_in"] = dpg.get_value("mapping_in")
+        self.mapping["money_out"] = dpg.get_value("mapping_out")
         self.mapping["category"] = dpg.get_value("mapping_cat")
 
     def _render_preview_table(self):
@@ -130,9 +138,13 @@ class ImportUI:
         acc_name = dpg.get_value("import_account_combo")
 
         # Ensure required fields are mapped
-        if not mapping.get("date") or not mapping.get("description") or not mapping.get("amount"):
-            logger.error("Required fields (Date, Description, Amount) must be mapped.")
+        if not mapping.get("date") or not mapping.get("description"):
+            logger.error("Required fields (Date, Description) must be mapped.")
             return
+
+        if not mapping.get("amount") and not (mapping.get("money_in") or mapping.get("money_out")):
+             logger.error("Amount or Money In/Out must be mapped.")
+             return
 
         # Resolve account_id
         accounts = self.api.get_accounts()
