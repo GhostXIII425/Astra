@@ -1,8 +1,7 @@
-dearpygui==2.1.1
-bcrypt==5.0.0
-cryptography==46.0.4
-pandas==3.0.0
-openpyxl==3.1.5
-scikit-learn==1.8.0
-numpy==2.4.1
-pytest==9.0.2
+dearpygui>=1.0.0
+bcrypt>=4.0.0
+cryptography>=41.0.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+numpy>=1.24.0
+pytest>=7.0.0

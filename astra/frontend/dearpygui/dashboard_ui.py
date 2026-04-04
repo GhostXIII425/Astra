@@ -1,5 +1,7 @@
 import dearpygui.dearpygui as dpg
 import logging
+from astra.backend.storage.models import Transaction, Account, AccountType
+from astra.frontend.dearpygui.import_ui import ImportUI
 
 logger = logging.getLogger(__name__)
 
@@ -9,6 +11,7 @@ class DashboardUI:
         self.on_logout = on_logout
         self._dark_mode = True
         self._parent = "main_window"
+        self.import_ui = ImportUI(self.api, self._on_import_complete)
 
     def show(self, parent="main_window"):
         self._parent = parent
@@ -21,6 +24,9 @@ class DashboardUI:
             with dpg.tab(label="Transactions"):
                 self._render_transactions()
 
+            with dpg.tab(label="Accounts"):
+                self._render_accounts()
+
             with dpg.tab(label="Charts"):
                 self._render_charts()
 
@@ -29,21 +35,26 @@ class DashboardUI:
 
     def _render_overview(self):
         summary = self.api.get_summary()
-        dpg.add_text(f"Welcome, {self.api.get_current_user().username}!")
+        dpg.add_text(f"Welcome to Astra")
         dpg.add_separator()
 
         with dpg.group(horizontal=True):
             dpg.add_text(f"Total Income: {summary.get('total_income', 0):.2f}")
             dpg.add_button(label="Refresh", callback=lambda: self.show(parent=self._parent))
+            with dpg.tooltip(dpg.last_item()):
+                dpg.add_text("Reload data from the backend and refresh all tabs.")
 
         dpg.add_text(f"Total Spent: {summary.get('total_spent', 0):.2f}")
 
     def _render_transactions(self):
-        """Render the transactions table and import controls."""
+        """Render the transactions table and manual/import controls."""
         with dpg.group():
             with dpg.group(horizontal=True):
-                dpg.add_input_text(label="File Path", tag="import_path", width=300)
-                dpg.add_button(label="Import", callback=self._import_callback)
+                dpg.add_button(label="Manual Entry", callback=self._show_manual_entry)
+                dpg.add_button(label="Import File", callback=self._show_file_picker)
+                dpg.add_loading_indicator(tag="import_spinner", show=False, radius=2)
+                dpg.add_text("", tag="import_status")
+
             dpg.add_separator()
 
             txs = self.api.get_transactions()
@@ -64,45 +75,134 @@ class DashboardUI:
                             dpg.add_text(tx.category)
                             dpg.add_text("Confirmed")
                         else:
-                            # Show prediction and a confirm button
                             with dpg.group(horizontal=True):
-                                dpg.add_text(f"{tx.category} ({tx.confidence:.1%})")
+                                dpg.add_text(f"{tx.category}")
                                 dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
+                                with dpg.tooltip(dpg.last_item()):
+                                    dpg.add_text("Confirm this category prediction to update rules.")
+
+    def _render_accounts(self):
+        with dpg.group():
+            dpg.add_button(label="Add Account", callback=self._show_add_account)
+            dpg.add_separator()
+
+            accounts = self.api.get_accounts()
+            with dpg.table(header_row=True, resizable=True):
+                dpg.add_table_column(label="Name")
+                dpg.add_table_column(label="Type")
+                dpg.add_table_column(label="Balance")
+
+                for acc in accounts:
+                    with dpg.table_row():
+                        dpg.add_text(acc.name)
+                        dpg.add_text(acc.type.value)
+                        dpg.add_text(f"{acc.balance:.2f}")
 
     def _render_charts(self):
         """Render charts using aggregated spending data."""
         categories = self.api.get_category_spending()
-
         if not categories:
             dpg.add_text("No data to display charts")
             return
 
         with dpg.plot(label="Spending by Category", height=400, width=-1):
             dpg.add_plot_legend()
-
-            # Setup X Axis with category labels
             x_labels = list(categories.keys())
             x_indices = list(range(len(x_labels)))
-
             with dpg.plot_axis(dpg.mvXAxis, label="Category"):
                 dpg.set_axis_ticks(dpg.last_item(), tuple((x_labels[i], x_indices[i]) for i in range(len(x_labels))))
-
             with dpg.plot_axis(dpg.mvYAxis, label="Amount"):
                 dpg.add_bar_series(x_indices, list(categories.values()), label="Spending")
 
     def _render_settings(self):
         dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme)
-        dpg.add_button(label="Manual Model Retrain", callback=self._retrain_callback)
         dpg.add_separator()
-        dpg.add_button(label="Logout", callback=self.on_logout)
+        dpg.add_button(label="Exit App", callback=dpg.stop_dearpygui)
+
+    def _show_manual_entry(self):
+        with dpg.window(label="Manual Transaction Entry", modal=True, width=400):
+            dpg.add_input_text(label="Date (YYYY-MM-DD)", tag="m_date", default_value=datetime.now().strftime("%Y-%m-%d"))
+            dpg.add_input_float(label="Amount", tag="m_amount")
+            dpg.add_input_text(label="Description", tag="m_desc")
+            dpg.add_input_text(label="Category", tag="m_cat")
+
+            accounts = self.api.get_accounts()
+            acc_names = [a.name for a in accounts]
+            dpg.add_combo(label="Account", items=acc_names, tag="m_acc")
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save", callback=self._save_manual_entry)
+                dpg.add_button(label="Cancel", callback=lambda s, a, u: dpg.delete_item(dpg.get_item_parent(s)))
+
+    def _save_manual_entry(self, sender, app_data):
+        try:
+            tx = Transaction(
+                date=datetime.fromisoformat(dpg.get_value("m_date")),
+                amount=dpg.get_value("m_amount"),
+                description=dpg.get_value("m_desc"),
+                category=dpg.get_value("m_cat") or "Uncategorized"
+            )
+            self.api.add_manual_transaction(tx)
+            dpg.delete_item(dpg.get_item_parent(sender))
+            self.show(parent=self._parent)
+            self._update_global_status("Transaction added", color=(0, 255, 0))
+        except Exception as e:
+            self._update_global_status(f"Error: {e}", color=(255, 0, 0))
+
+    def _show_file_picker(self):
+        # Implementation of native file picker trigger
+        # This usually involves a hidden file_dialog that we show
+        if not dpg.does_item_exist("import_dialog"):
+            with dpg.file_dialog(directory_selector=False, show=False, callback=self._file_picked_callback, tag="import_dialog", width=700, height=400):
+                dpg.add_file_extension(".csv")
+                dpg.add_file_extension(".xlsx")
+                dpg.add_file_extension(".*")
+        dpg.show_item("import_dialog")
+
+    def _file_picked_callback(self, sender, app_data):
+        file_path = app_data['file_path_name']
+        logger.info(f"File picked: {file_path}")
+        # Close the picker
+        dpg.hide_item("import_dialog")
+        # Open mapping UI
+        self.import_ui.show_mapping(file_path)
+
+    def _on_import_complete(self, count):
+        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
+        # Find and delete mapping window
+        # Mapping windows have dynamic names in DPG if not tagged,
+        # but my ImportUI uses modal windows.
+        # I should probably tag them for easier cleanup.
+        # For now, just refresh the dashboard
+        self.show(parent=self._parent)
+
+    def _show_add_account(self):
+        with dpg.window(label="Add Account", modal=True, width=300):
+            dpg.add_input_text(label="Account Name", tag="a_name")
+            dpg.add_combo(label="Type", items=[t.value for t in AccountType], tag="a_type", default_value=AccountType.CHECKING.value)
+            dpg.add_input_float(label="Initial Balance", tag="a_bal")
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save", callback=self._save_account)
+                dpg.add_button(label="Cancel", callback=lambda s, a, u: dpg.delete_item(dpg.get_item_parent(s)))
+
+    def _save_account(self, sender, app_data):
+        acc = Account(
+            name=dpg.get_value("a_name"),
+            type=AccountType(dpg.get_value("a_type")),
+            balance=dpg.get_value("a_bal")
+        )
+        self.api.add_account(acc)
+        dpg.delete_item(dpg.get_item_parent(sender))
+        self.show(parent=self._parent)
+        self._update_global_status("Account added", color=(0, 255, 0))
 
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
         if self._dark_mode:
-            dpg.bind_theme(0)  # Use DPG internal default
+            dpg.bind_theme(0)
             logger.info("Switched to Dark Mode")
         else:
-            # Simple light theme setup
             with dpg.theme() as light_theme:
                 with dpg.theme_component(dpg.mvAll):
                     dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (240, 240, 240))
@@ -115,23 +215,16 @@ class DashboardUI:
             dpg.bind_theme(light_theme)
             logger.info("Switched to Light Mode")
 
-    def _retrain_callback(self):
-        logger.info("Manual retraining triggered")
-        user_id = self.api.get_current_user().id
-        txs = self.api.get_transactions()
-        self.api.ml_engines[user_id].train(txs)
-        logger.info("Model retrained successfully")
-
     def _confirm_callback(self, tx):
-        """Callback to confirm a transaction's category."""
-        self.api.confirm_transaction(tx.id, tx.category)
-        logger.info(f"Confirmed transaction {tx.id} as {tx.category}")
-        self.show(parent=self._parent)
-
-    def _import_callback(self):
-        """Callback to import transactions from a file path."""
-        path = dpg.get_value("import_path")
-        if path:
-            logger.info(f"Importing transactions from {path}")
-            self.api.import_transactions(path)
+        self._update_global_status(f"Confirming {tx.id}...", color=(255, 255, 0))
+        try:
+            self.api.confirm_transaction(tx.id, tx.category)
+            self._update_global_status(f"Confirmed: {tx.category}", color=(0, 255, 0))
             self.show(parent=self._parent)
+        except Exception as e:
+            self._update_global_status("Confirmation failed", color=(255, 0, 0))
+
+    def _update_global_status(self, message, color=(0, 255, 0)):
+        if dpg.does_item_exist("global_status"):
+            dpg.set_value("global_status", message)
+            dpg.configure_item("global_status", color=color)
