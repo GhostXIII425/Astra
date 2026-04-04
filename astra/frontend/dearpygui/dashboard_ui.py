@@ -13,7 +13,6 @@ class DashboardUI:
         self._dark_mode = True
         self._parent = "main_window"
         self.import_ui = ImportUI(self.api, on_import_complete=self._on_import_complete)
-        self.import_ui = ImportUI(self.api, self._on_import_complete)
 
     def show(self, parent="main_window"):
         self._parent = parent
@@ -29,24 +28,27 @@ class DashboardUI:
             with dpg.tab(label="Accounts"):
                 self._render_accounts()
 
-            with dpg.tab(label="Charts"):
-                self._render_charts()
-
             with dpg.tab(label="Settings"):
                 self._render_settings()
 
     def _render_overview(self):
         summary = self.api.get_summary()
-        dpg.add_text(f"Welcome to Astra")
+        dpg.add_text(f"Astra Financial Overview")
         dpg.add_separator()
 
         with dpg.group(horizontal=True):
-            dpg.add_text(f"Total Income: {summary.get('total_income', 0):.2f}")
-            dpg.add_button(label="Refresh", callback=lambda: self.show(parent=self._parent))
+            dpg.add_text("Total Income: ")
+            dpg.add_text(f"{summary.get('total_income', 0):.2f}", color=(0, 255, 0))
+
+            dpg.add_spacer(width=20)
+
+            dpg.add_text("Total Spent: ")
+            dpg.add_text(f"{summary.get('total_spent', 0):.2f}", color=(255, 100, 100))
+
+            dpg.add_spacer(width=40)
+            dpg.add_button(label="Refresh All", callback=lambda: self.show(parent=self._parent))
             with dpg.tooltip(dpg.last_item()):
                 dpg.add_text("Reload data from the backend and refresh all tabs.")
-
-        dpg.add_text(f"Total Spent: {summary.get('total_spent', 0):.2f}")
 
     def _render_transactions(self):
         """Render the transactions table and manual/import controls."""
@@ -54,92 +56,94 @@ class DashboardUI:
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Manual Entry", callback=self._show_manual_entry)
                 dpg.add_button(label="Import Transactions...", callback=self.import_ui.show)
-                dpg.add_button(label="Import File", callback=self._show_file_picker)
-                dpg.add_loading_indicator(tag="import_spinner", show=False, radius=2)
-                dpg.add_text("", tag="import_status")
-
             dpg.add_separator()
 
             txs = self.api.get_transactions()
-            with dpg.table(header_row=True, resizable=True, policy=dpg.mvTable_SizingStretchProp):
-                dpg.add_table_column(label="Date")
+            accounts = self.api.get_accounts()
+            acc_map = {a.id: a.name for a in accounts}
+
+            with dpg.table(header_row=True, resizable=True, policy=dpg.mvTable_SizingStretchProp,
+                          borders_outerH=True, borders_innerV=True, borders_innerH=True):
+                dpg.add_table_column(label="Date", width_fixed=True)
+                dpg.add_table_column(label="Account")
                 dpg.add_table_column(label="Description")
-                dpg.add_table_column(label="Amount")
+                dpg.add_table_column(label="Amount", width_fixed=True)
                 dpg.add_table_column(label="Category")
-                dpg.add_table_column(label="Action")
+                dpg.add_table_column(label="Status")
+                dpg.add_table_column(label="Action", width_fixed=True)
 
                 for tx in txs:
                     with dpg.table_row():
                         dpg.add_text(tx.date.strftime("%Y-%m-%d"))
+                        dpg.add_text(acc_map.get(tx.account_id, "Unknown"))
                         dpg.add_text(tx.description)
-                        dpg.add_text(f"{tx.amount:.2f}")
+
+                        amount_color = (255, 100, 100) if tx.amount < 0 else (0, 255, 0)
+                        dpg.add_text(f"{tx.amount:.2f}", color=amount_color)
 
                         if tx.is_confirmed:
                             dpg.add_text(tx.category)
-                            dpg.add_text("Confirmed")
+                            dpg.add_text("Confirmed", color=(0, 255, 0))
+                            dpg.add_text("") # No action
                         else:
-                            with dpg.group(horizontal=True):
-                                dpg.add_text(f"{tx.category}")
-                                dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
-                                with dpg.tooltip(dpg.last_item()):
-                                    dpg.add_text("Confirm this category prediction to update rules.")
+                            dpg.add_text(tx.category, color=(200, 200, 100))
+                            dpg.add_text("Predicted", color=(200, 200, 100))
+                            dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
 
     def _render_accounts(self):
         with dpg.group():
-            dpg.add_button(label="Add Account", callback=self._show_add_account)
+            dpg.add_button(label="Add New Account", callback=self._show_add_account)
             dpg.add_separator()
 
             accounts = self.api.get_accounts()
-            with dpg.table(header_row=True, resizable=True):
-                dpg.add_table_column(label="Name")
+            with dpg.table(header_row=True, resizable=True, borders_outerH=True, borders_innerV=True):
+                dpg.add_table_column(label="Account Name")
                 dpg.add_table_column(label="Type")
-                dpg.add_table_column(label="Balance")
+                dpg.add_table_column(label="Institution")
+                dpg.add_table_column(label="Current Balance")
 
                 for acc in accounts:
                     with dpg.table_row():
                         dpg.add_text(acc.name)
                         dpg.add_text(acc.type.value)
-                        dpg.add_text(f"{acc.balance:.2f}")
-
-    def _render_charts(self):
-        """Render charts using aggregated spending data."""
-        categories = self.api.get_category_spending()
-        if not categories:
-            dpg.add_text("No data to display charts")
-            return
-
-        with dpg.plot(label="Spending by Category", height=400, width=-1):
-            dpg.add_plot_legend()
-            x_labels = list(categories.keys())
-            x_indices = list(range(len(x_labels)))
-            with dpg.plot_axis(dpg.mvXAxis, label="Category"):
-                dpg.set_axis_ticks(dpg.last_item(), tuple((x_labels[i], x_indices[i]) for i in range(len(x_labels))))
-            with dpg.plot_axis(dpg.mvYAxis, label="Amount"):
-                dpg.add_bar_series(x_indices, list(categories.values()), label="Spending")
+                        dpg.add_text(acc.institution)
+                        dpg.add_text(f"{acc.balance:.2f}", color=(0, 255, 0) if acc.balance >= 0 else (255, 100, 100))
 
     def _render_settings(self):
-        dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme)
-        dpg.add_separator()
-        dpg.add_button(label="Logout", callback=self.on_logout)
-        dpg.add_button(label="Exit App", callback=dpg.stop_dearpygui)
+        with dpg.group(width=300):
+            dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme, width=-1)
+            dpg.add_spacer(height=10)
+            dpg.add_button(label="Lock Vault & Logout", callback=self.on_logout, width=-1)
+            dpg.add_separator()
+            dpg.add_button(label="Exit Astra", callback=dpg.stop_dearpygui, width=-1)
 
     def _show_manual_entry(self):
-        with dpg.window(label="Manual Transaction Entry", modal=True, width=400):
+        if dpg.does_item_exist("modal_manual_entry"):
+            dpg.delete_item("modal_manual_entry")
+
+        with dpg.window(label="Manual Transaction Entry", modal=True, width=400, tag="modal_manual_entry"):
             dpg.add_input_text(label="Date (YYYY-MM-DD)", tag="m_date", default_value=datetime.now().strftime("%Y-%m-%d"))
             dpg.add_input_float(label="Amount", tag="m_amount")
             dpg.add_input_text(label="Description", tag="m_desc")
-            dpg.add_input_text(label="Category", tag="m_cat")
+            dpg.add_input_text(label="Category (Optional)", tag="m_cat")
 
             accounts = self.api.get_accounts()
             acc_names = [a.name for a in accounts]
             dpg.add_combo(label="Account", items=acc_names, tag="m_acc")
+            if acc_names:
+                dpg.set_value("m_acc", acc_names[0])
 
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Save", callback=self._save_manual_entry)
-                dpg.add_button(label="Cancel", callback=lambda s, a, u: dpg.delete_item(dpg.get_item_parent(s)))
+                dpg.add_button(label="Save", width=100, callback=self._save_manual_entry)
+                dpg.add_button(label="Cancel", width=100, callback=lambda: dpg.delete_item("modal_manual_entry"))
 
     def _save_manual_entry(self, sender, app_data):
         try:
+            desc = dpg.get_value("m_desc")
+            if not desc:
+                self._update_global_status("Description is required", color=(255, 0, 0))
+                return
+
             acc_name = dpg.get_value("m_acc")
             accounts = self.api.get_accounts()
             account = next((a for a in accounts if a.name == acc_name), None)
@@ -147,65 +151,47 @@ class DashboardUI:
             tx = Transaction(
                 date=datetime.fromisoformat(dpg.get_value("m_date")),
                 amount=dpg.get_value("m_amount"),
-                description=dpg.get_value("m_desc"),
+                description=desc,
                 category=dpg.get_value("m_cat") or "Uncategorized",
                 account_id=account.id if account else None
-                category=dpg.get_value("m_cat") or "Uncategorized"
             )
             self.api.add_manual_transaction(tx)
-            dpg.delete_item(dpg.get_item_parent(sender))
+            dpg.delete_item("modal_manual_entry")
             self.show(parent=self._parent)
             self._update_global_status("Transaction added", color=(0, 255, 0))
         except Exception as e:
             self._update_global_status(f"Error: {e}", color=(255, 0, 0))
 
-    def _show_file_picker(self):
-        # Implementation of native file picker trigger
-        # This usually involves a hidden file_dialog that we show
-        if not dpg.does_item_exist("import_dialog"):
-            with dpg.file_dialog(directory_selector=False, show=False, callback=self._file_picked_callback, tag="import_dialog", width=700, height=400):
-                dpg.add_file_extension(".csv")
-                dpg.add_file_extension(".xlsx")
-                dpg.add_file_extension(".*")
-        dpg.show_item("import_dialog")
-
-    def _file_picked_callback(self, sender, app_data):
-        file_path = app_data['file_path_name']
-        logger.info(f"File picked: {file_path}")
-        # Close the picker
-        dpg.hide_item("import_dialog")
-        # Open mapping UI
-        self.import_ui.show_mapping(file_path)
-
-    def _on_import_complete(self, count):
-        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
-        # Find and delete mapping window
-        # Mapping windows have dynamic names in DPG if not tagged,
-        # but my ImportUI uses modal windows.
-        # I should probably tag them for easier cleanup.
-        # For now, just refresh the dashboard
-        self.show(parent=self._parent)
-
     def _show_add_account(self):
-        with dpg.window(label="Add Account", modal=True, width=300):
+        if dpg.does_item_exist("modal_add_account"):
+            dpg.delete_item("modal_add_account")
+
+        with dpg.window(label="Add Account", modal=True, width=300, tag="modal_add_account"):
             dpg.add_input_text(label="Account Name", tag="a_name")
             dpg.add_combo(label="Type", items=[t.value for t in AccountType], tag="a_type", default_value=AccountType.CHECKING.value)
+            dpg.add_input_text(label="Institution", tag="a_inst")
             dpg.add_input_float(label="Initial Balance", tag="a_bal")
 
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Save", callback=self._save_account)
-                dpg.add_button(label="Cancel", callback=lambda s, a, u: dpg.delete_item(dpg.get_item_parent(s)))
+                dpg.add_button(label="Save", width=100, callback=self._save_account)
+                dpg.add_button(label="Cancel", width=100, callback=lambda: dpg.delete_item("modal_add_account"))
 
     def _save_account(self, sender, app_data):
+        name = dpg.get_value("a_name")
+        if not name:
+            self._update_global_status("Account name is required", color=(255, 0, 0))
+            return
+
         acc = Account(
-            name=dpg.get_value("a_name"),
+            name=name,
             type=AccountType(dpg.get_value("a_type")),
+            institution=dpg.get_value("a_inst"),
             balance=dpg.get_value("a_bal")
         )
         self.api.add_account(acc)
-        dpg.delete_item(dpg.get_item_parent(sender))
+        dpg.delete_item("modal_add_account")
         self.show(parent=self._parent)
-        self._update_global_status("Account added", color=(0, 255, 0))
+        self._update_global_status(f"Account '{name}' added", color=(0, 255, 0))
 
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
@@ -226,7 +212,7 @@ class DashboardUI:
             logger.info("Switched to Light Mode")
 
     def _confirm_callback(self, tx):
-        self._update_global_status(f"Confirming {tx.id}...", color=(255, 255, 0))
+        self._update_global_status(f"Confirming...", color=(255, 255, 0))
         try:
             self.api.confirm_transaction(tx.id, tx.category)
             self._update_global_status(f"Confirmed: {tx.category}", color=(0, 255, 0))
@@ -235,7 +221,7 @@ class DashboardUI:
             self._update_global_status("Confirmation failed", color=(255, 0, 0))
 
     def _on_import_complete(self, count):
-        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
+        self._update_global_status(f"Imported {count} transactions successfully", color=(0, 255, 0))
         self.show(parent=self._parent)
 
     def _update_global_status(self, message, color=(0, 255, 0)):

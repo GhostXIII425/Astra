@@ -28,7 +28,6 @@ def test_full_workflow_offline(api):
     assert txs[0].description == "Grocery Store"
 
     # 3. Rule-based categorization
-    # Create a rule
     from astra.backend.storage.models import CategoryRule
     api.db_manager.add_rule(CategoryRule(keyword="Starbucks", category="Coffee"))
     api.intelligence.refresh_rules()
@@ -36,8 +35,6 @@ def test_full_workflow_offline(api):
     # Import/Add transaction matching rule
     api.add_manual_transaction(Transaction(description="Morning Starbucks", amount=-5.50))
     txs = api.get_transactions()
-    # Ordered by date desc, so latest is at top if dates are same,
-    # but my manual entry uses now() which is fine.
     latest = next(t for t in txs if "Starbucks" in t.description)
     assert latest.category == "Coffee"
 
