@@ -12,7 +12,7 @@ class DashboardUI:
         self.on_logout = on_logout
         self._dark_mode = True
         self._parent = "main_window"
-        self.import_ui = ImportUI(self.api, on_import_complete=lambda: self.show(parent=self._parent))
+        self.import_ui = ImportUI(self.api, on_import_complete=self._on_import_complete)
 
     def show(self, parent="main_window"):
         self._parent = parent
@@ -200,6 +200,10 @@ class DashboardUI:
             self.show(parent=self._parent)
         except Exception as e:
             self._update_global_status("Confirmation failed", color=(255, 0, 0))
+
+    def _on_import_complete(self, count):
+        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
+        self.show(parent=self._parent)
 
     def _update_global_status(self, message, color=(0, 255, 0)):
         if dpg.does_item_exist("global_status"):

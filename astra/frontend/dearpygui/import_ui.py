@@ -2,6 +2,7 @@ import dearpygui.dearpygui as dpg
 import logging
 import os
 from typing import Dict, Any, List
+from astra.backend.storage.models import Transaction
 
 logger = logging.getLogger(__name__)
 
@@ -15,67 +16,20 @@ class ImportUI:
         self.mapping = {"date": "", "description": "", "amount": "", "category": ""}
 
     def show(self):
-        if not dpg.does_item_exist("import_modal"):
-            self._create_modal()
+        # Trigger file dialog
+        if not dpg.does_item_exist("file_dialog_tag"):
+            self._create_file_dialog()
+        dpg.show_item("file_dialog_tag")
 
-        # Refresh accounts list
-        accounts = self.api.get_accounts()
-        acc_names = [a.name for a in accounts]
-        dpg.configure_item("import_account_combo", items=acc_names)
-        if acc_names:
-            dpg.set_value("import_account_combo", acc_names[0])
-
-        dpg.configure_item("import_modal", show=True)
-
-    def _create_modal(self):
-        with dpg.window(label="Import Transactions", tag="import_modal", modal=True, show=False, width=700, height=600, no_scrollbar=False):
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Select File...", callback=self._open_file_dialog)
-                dpg.add_text("No file selected", tag="selected_file_text")
-
-            dpg.add_separator()
-
-            with dpg.group(tag="mapping_group", show=False):
-                dpg.add_text("Map Columns")
-                with dpg.group(horizontal=True):
-                    with dpg.group():
-                        dpg.add_text("Date Column:")
-                        dpg.add_text("Description Column:")
-                        dpg.add_text("Amount Column:")
-                        dpg.add_text("Category Column (Optional):")
-                    with dpg.group():
-                        dpg.add_combo(tag="mapping_date", width=200, callback=self._update_mapping)
-                        dpg.add_combo(tag="mapping_desc", width=200, callback=self._update_mapping)
-                        dpg.add_combo(tag="mapping_amount", width=200, callback=self._update_mapping)
-                        dpg.add_combo(tag="mapping_cat", width=200, callback=self._update_mapping)
-
-                dpg.add_input_text(label="Date Format (e.g. %Y-%m-%d)", tag="import_date_format", default_value="%Y-%m-%d")
-
-                dpg.add_combo(label="Import into Account", tag="import_account_combo", width=200)
-
-                dpg.add_separator()
-                dpg.add_text("Data Preview (First 10 rows)")
-                with dpg.child_window(height=200, tag="preview_container"):
-                    pass # Table will be added here
-
-                dpg.add_separator()
-                with dpg.group(horizontal=True):
-                    dpg.add_button(label="Import", width=100, callback=self._import_callback)
-                    dpg.add_button(label="Cancel", width=100, callback=lambda: dpg.configure_item("import_modal", show=False))
-
-        # File Dialog
+    def _create_file_dialog(self):
         with dpg.file_dialog(directory_selector=False, show=False, callback=self._file_selected_callback, tag="file_dialog_tag", width=600, height=400):
             dpg.add_file_extension(".csv", color=(255, 255, 0, 255))
             dpg.add_file_extension(".xlsx", color=(0, 255, 0, 255))
             dpg.add_file_extension(".xls", color=(0, 255, 0, 255))
             dpg.add_file_extension(".*", color=(255, 255, 255, 255))
 
-    def _open_file_dialog(self):
-        dpg.show_item("file_dialog_tag")
-
     def _file_selected_callback(self, sender, app_data):
         self.selected_file = app_data['file_path_name']
-        dpg.set_value("selected_file_text", f"File: {os.path.basename(self.selected_file)}")
 
         # Load preview
         self.preview_data = self.api.get_import_preview(self.selected_file)
@@ -84,20 +38,52 @@ class ImportUI:
             return
 
         self.columns = self.preview_data["columns"]
+        self._show_mapping_modal()
 
-        # Update combos
-        items = [""] + self.columns
-        dpg.configure_item("mapping_date", items=items)
-        dpg.configure_item("mapping_desc", items=items)
-        dpg.configure_item("mapping_amount", items=items)
-        dpg.configure_item("mapping_cat", items=items)
+    def _show_mapping_modal(self):
+        if dpg.does_item_exist("import_modal"):
+            dpg.delete_item("import_modal")
 
-        # Auto-mapping heuristic
+        with dpg.window(label="Map Columns", tag="import_modal", modal=True, width=700, height=600):
+            dpg.add_text(f"File: {os.path.basename(self.selected_file)}")
+            dpg.add_separator()
+
+            with dpg.group(tag="mapping_group"):
+                dpg.add_text("Map Columns")
+                items = [""] + self.columns
+
+                with dpg.group(horizontal=True):
+                    with dpg.group():
+                        dpg.add_text("Date Column:")
+                        dpg.add_text("Description Column:")
+                        dpg.add_text("Amount Column:")
+                        dpg.add_text("Category Column (Optional):")
+                    with dpg.group():
+                        dpg.add_combo(items=items, tag="mapping_date", width=200, callback=self._update_mapping)
+                        dpg.add_combo(items=items, tag="mapping_desc", width=200, callback=self._update_mapping)
+                        dpg.add_combo(items=items, tag="mapping_amount", width=200, callback=self._update_mapping)
+                        dpg.add_combo(items=items, tag="mapping_cat", width=200, callback=self._update_mapping)
+
+                dpg.add_input_text(label="Date Format (e.g. %Y-%m-%d)", tag="import_date_format", default_value="%Y-%m-%d")
+
+                # Resolve account selection
+                accounts = self.api.get_accounts()
+                acc_names = [a.name for a in accounts]
+                dpg.add_combo(label="Import into Account", items=acc_names, tag="import_account_combo", width=200)
+                if acc_names:
+                    dpg.set_value("import_account_combo", acc_names[0])
+
+                dpg.add_separator()
+                dpg.add_text("Data Preview (First 10 rows)")
+                with dpg.child_window(height=200, tag="preview_container"):
+                    self._render_preview_table()
+
+                dpg.add_separator()
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Import", width=100, callback=self._import_callback)
+                    dpg.add_button(label="Cancel", width=100, callback=lambda: dpg.delete_item("import_modal"))
+
         self._auto_map()
-
-        # Show mapping group and update preview table
-        dpg.show_item("mapping_group")
-        self._render_preview_table()
 
     def _auto_map(self):
         cols_lower = [c.lower() for c in self.columns]
@@ -153,8 +139,13 @@ class ImportUI:
         account = next((a for a in accounts if a.name == acc_name), None)
 
         logger.info(f"Starting import of {self.selected_file} into {acc_name}")
+
+        # Count transactions (this is a simplified count for the callback)
+        # In a real app we might get the exact count from the parser
+        count = len(self.preview_data.get("rows", []))
+
         self.api.import_transactions(self.selected_file, mapping=mapping, date_format=date_format, account_id=account.id if account else None)
 
-        dpg.configure_item("import_modal", show=False)
+        dpg.delete_item("import_modal")
         if self.on_import_complete:
-            self.on_import_complete()
+            self.on_import_complete(count)

@@ -21,8 +21,6 @@ class AstraAPI:
         """Unlock the database with a vault key."""
         try:
             self.db_manager.set_encryption(password)
-            # Try a dummy read to verify?
-            # For now, just set it.
             return True
         except Exception as e:
             logger.error(f"Failed to unlock: {e}")
@@ -80,9 +78,9 @@ class AstraAPI:
             # Predict category if not already set by mapping or if it was "Uncategorized"
             if tx.category == "Uncategorized":
                 tx.category = self.intelligence.predict_category(tx)
-                tx.confidence = 0.8 # Placeholder for "predicted"
+                tx.confidence = 0.8
             else:
-                tx.confidence = 1.0 # Trust the mapping
+                tx.confidence = 1.0
 
             self.db_manager.add_transaction(tx)
 
