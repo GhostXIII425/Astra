@@ -11,32 +11,39 @@ class DashboardUI:
         self.api = api
         self.on_logout = on_logout
         self._dark_mode = True
-        self._parent = "main_window"
+        self._parent = "content_group"
         self.import_ui = ImportUI(self.api, on_import_complete=self._on_import_complete)
 
-    def show(self, parent="main_window"):
+    def show(self, parent="content_group"):
         self._parent = parent
-        dpg.delete_item(parent, children_only=True)
+        if not dpg.does_item_exist(parent):
+            logger.error(f"Dashboard parent {parent} does not exist.")
+            return
 
-        with dpg.tab_bar(parent=parent):
-            with dpg.tab(label="Overview"):
+        # Clear parent carefully
+        children = dpg.get_item_children(parent, 1)
+        for child in children:
+            dpg.delete_item(child)
+
+        with dpg.tab_bar(parent=parent, tag="dashboard_tabs"):
+            with dpg.tab(label="Overview", tag="tab_overview"):
                 self._render_overview()
 
-            with dpg.tab(label="Transactions"):
+            with dpg.tab(label="Transactions", tag="tab_transactions"):
                 self._render_transactions()
 
-            with dpg.tab(label="Accounts"):
+            with dpg.tab(label="Accounts", tag="tab_accounts"):
                 self._render_accounts()
 
-            with dpg.tab(label="Settings"):
+            with dpg.tab(label="Settings", tag="tab_settings"):
                 self._render_settings()
 
     def _render_overview(self):
         summary = self.api.get_summary()
-        dpg.add_text(f"Astra Financial Overview")
-        dpg.add_separator()
+        dpg.add_text("Astra Financial Overview", parent="tab_overview")
+        dpg.add_separator(parent="tab_overview")
 
-        with dpg.group(horizontal=True):
+        with dpg.group(horizontal=True, parent="tab_overview"):
             dpg.add_text("Total Income: ")
             dpg.add_text(f"{summary.get('total_income', 0):.2f}", color=(0, 255, 0))
 
@@ -47,12 +54,10 @@ class DashboardUI:
 
             dpg.add_spacer(width=40)
             dpg.add_button(label="Refresh All", callback=lambda: self.show(parent=self._parent))
-            with dpg.tooltip(dpg.last_item()):
-                dpg.add_text("Reload data from the backend and refresh all tabs.")
 
     def _render_transactions(self):
         """Render the transactions table and manual/import controls."""
-        with dpg.group():
+        with dpg.group(parent="tab_transactions"):
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Manual Entry", callback=self._show_manual_entry)
                 dpg.add_button(label="Import Transactions...", callback=self.import_ui.show)
@@ -84,14 +89,14 @@ class DashboardUI:
                         if tx.is_confirmed:
                             dpg.add_text(tx.category)
                             dpg.add_text("Confirmed", color=(0, 255, 0))
-                            dpg.add_text("") # No action
+                            dpg.add_text("")
                         else:
                             dpg.add_text(tx.category, color=(200, 200, 100))
                             dpg.add_text("Predicted", color=(200, 200, 100))
                             dpg.add_button(label="Confirm", callback=lambda s, a, u=tx: self._confirm_callback(u))
 
     def _render_accounts(self):
-        with dpg.group():
+        with dpg.group(parent="tab_accounts"):
             dpg.add_button(label="Add New Account", callback=self._show_add_account)
             dpg.add_separator()
 
@@ -110,7 +115,7 @@ class DashboardUI:
                         dpg.add_text(f"{acc.balance:.2f}", color=(0, 255, 0) if acc.balance >= 0 else (255, 100, 100))
 
     def _render_settings(self):
-        with dpg.group(width=300):
+        with dpg.group(width=300, parent="tab_settings"):
             dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme, width=-1)
             dpg.add_spacer(height=10)
             dpg.add_button(label="Lock Vault & Logout", callback=self.on_logout, width=-1)
@@ -222,6 +227,7 @@ class DashboardUI:
 
     def _on_import_complete(self, count):
         self._update_global_status(f"Imported {count} transactions successfully", color=(0, 255, 0))
+        # Use a safe refresh
         self.show(parent=self._parent)
 
     def _update_global_status(self, message, color=(0, 255, 0)):
