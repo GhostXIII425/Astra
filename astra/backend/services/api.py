@@ -2,10 +2,9 @@ import os
 import logging
 from typing import List, Optional, Tuple, Dict, Any
 from astra.backend.storage.database import DatabaseManager
-from astra.backend.auth.manager import AuthManager
 from astra.backend.parsing.parsers import TransactionParser
-from astra.backend.ml.engine import MLEngine
-from astra.backend.storage.models import Transaction, Account, User
+from astra.backend.parsing.intelligence import IntelligenceSystem
+from astra.backend.storage.models import Transaction, Account, CategoryRule
 
 logger = logging.getLogger(__name__)
 
@@ -14,46 +13,57 @@ class AstraAPI:
     def __init__(self, data_dir: str = "data"):
         """Initialize the API with a data directory."""
         self.db_manager = DatabaseManager(data_dir)
-        self.auth_manager = AuthManager(self.db_manager)
         self.parser = TransactionParser()
-        self.ml_engines = {} # user_id -> MLEngine
+        self.intelligence = IntelligenceSystem(self.db_manager)
 
-    # Auth
-    def register(self, username, password) -> bool:
-        """Register a new user."""
-        return self.auth_manager.register(username, password)
+    # Security
+    def unlock(self, password: str) -> bool:
+        """Unlock the database with a vault key."""
+        try:
+            self.db_manager.set_encryption(password)
+            # Try a dummy read to verify?
+            # For now, just set it.
+            return True
+        except Exception as e:
+            logger.error(f"Failed to unlock: {e}")
+            return False
 
-    def login(self, username, password) -> bool:
-        success = self.auth_manager.login(username, password)
-        if success:
-            user_id = self.auth_manager.current_user.id
-            self.ml_engines[user_id] = MLEngine()
-            # Initial train
-            txs = self.db_manager.get_transactions(user_id)
-            self.ml_engines[user_id].train(txs)
-        return success
+    def is_unlocked(self) -> bool:
+        return self.db_manager.is_unlocked()
 
-    def logout(self):
-        self.auth_manager.logout()
+    # Accounts
+    def add_account(self, acc: Account) -> int:
+        return self.db_manager.add_account(acc)
 
-    def get_current_user(self) -> Optional[User]:
-        return self.auth_manager.current_user
+    def get_accounts(self) -> List[Account]:
+        return self.db_manager.get_accounts()
 
     # Transactions
     def get_transactions(self) -> List[Transaction]:
-        if not self.auth_manager.is_authenticated():
-            return []
-        user_id = self.auth_manager.current_user.id
-        return self.db_manager.get_transactions(user_id)
+        return self.db_manager.get_transactions()
 
+    def add_manual_transaction(self, tx: Transaction):
+        """Add a transaction, automatically predicting its category."""
+        if tx.category == "Uncategorized":
+            tx.category = self.intelligence.predict_category(tx)
+        self.db_manager.add_transaction(tx)
+
+    def confirm_transaction(self, transaction_id: int, category: str):
+        txs = self.get_transactions()
+        tx = next((t for t in txs if t.id == transaction_id), None)
+        if tx:
+            tx.category = category
+            tx.is_confirmed = True
+            # Create a rule if it doesn't exist to "learn" from correction
+            self.db_manager.add_rule(CategoryRule(keyword=tx.description, category=category))
+            self.db_manager.update_transaction(tx)
+            self.intelligence.refresh_rules()
+
+    # Import
     def get_import_preview(self, filepath: str) -> Dict[str, Any]:
         return self.parser.preview_file(filepath)
 
     def import_transactions(self, filepath: str, mapping: Dict[str, str] = None, date_format: str = None, account_id: int = None):
-        if not self.auth_manager.is_authenticated():
-            return
-
-        user_id = self.auth_manager.current_user.id
         ext = os.path.splitext(filepath)[1].lower()
 
         if ext == '.csv':
@@ -69,49 +79,16 @@ class AstraAPI:
 
             # Predict category if not already set by mapping or if it was "Uncategorized"
             if tx.category == "Uncategorized":
-                pred, conf = self.ml_engines[user_id].predict(tx.description)
-                tx.category = pred
-                tx.confidence = conf
+                tx.category = self.intelligence.predict_category(tx)
+                tx.confidence = 0.8 # Placeholder for "predicted"
             else:
                 tx.confidence = 1.0 # Trust the mapping
 
-            self.db_manager.add_transaction(user_id, tx)
-
-    def confirm_transaction(self, transaction_id: int, category: str):
-        if not self.auth_manager.is_authenticated():
-            return
-
-        user_id = self.auth_manager.current_user.id
-        txs = self.get_transactions()
-        tx = next((t for t in txs if t.id == transaction_id), None)
-        if tx:
-            tx.category = category
-            tx.is_confirmed = True
-            tx.confidence = 1.0
-            self.db_manager.update_transaction(user_id, tx)
-            # Update ML model
-            self.ml_engines[user_id].update(tx)
-
-    # Accounts
-    def get_accounts(self) -> List[Account]:
-        if not self.auth_manager.is_authenticated():
-            return []
-        user_id = self.auth_manager.current_user.id
-        return self.db_manager.get_accounts(user_id)
-
-    def create_account(self, name: str, account_number: str = "", institution: str = "", balance: float = 0.0) -> int:
-        if not self.auth_manager.is_authenticated():
-            return -1
-        user_id = self.auth_manager.current_user.id
-        acc = Account(name=name, account_number=account_number, institution=institution, balance=balance)
-        return self.db_manager.add_account(user_id, acc)
+            self.db_manager.add_transaction(tx)
 
     # Dashboard data
     def get_summary(self):
         """Get a summary of spending and income."""
-        if not self.auth_manager.is_authenticated():
-            return {}
-
         txs = self.get_transactions()
         total_spent = sum(t.amount for t in txs if t.amount < 0)
         total_income = sum(t.amount for t in txs if t.amount > 0)
@@ -124,12 +101,9 @@ class AstraAPI:
 
     def get_category_spending(self) -> dict:
         """Aggregate total spending (absolute value) per category."""
-        if not self.auth_manager.is_authenticated():
-            return {}
-
         txs = self.get_transactions()
         categories = {}
         for t in txs:
-            # We aggregate absolute values for the chart
-            categories[t.category] = categories.get(t.category, 0) + abs(t.amount)
+            if t.amount < 0:
+                categories[t.category] = categories.get(t.category, 0) + abs(t.amount)
         return categories

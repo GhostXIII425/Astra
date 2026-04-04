@@ -6,7 +6,7 @@ from datetime import datetime
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from astra.backend.storage.models import User, Transaction, Account
+from astra.backend.storage.models import Transaction, Account, AccountType, CategoryRule
 
 class DataEncryption:
     @staticmethod
@@ -33,57 +33,38 @@ class DataEncryption:
         return self.fernet.decrypt(token.encode()).decode()
 
 class DatabaseManager:
-    """Manages SQLite connections, schema creation, and user isolation."""
+    """Manages the single local SQLite database."""
     def __init__(self, data_dir: str = "data"):
-        """Initialize the database manager and ensure the data directory exists."""
         self.data_dir = data_dir
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
-        self.system_db_path = os.path.join(data_dir, "system.db")
-        self._init_system_db()
-        self._encryption_cache = {} # user_id -> DataEncryption
+        self.db_path = os.path.join(data_dir, "astra_local.db")
+        self.encryption: Optional[DataEncryption] = None
+        self._init_db()
 
-    def set_user_encryption(self, user_id: str, password: str, salt: bytes):
-        key = DataEncryption.generate_key(password, salt)
-        self._encryption_cache[user_id] = DataEncryption(key)
-
-    def _get_encryption(self, user_id: str) -> DataEncryption:
-        if user_id not in self._encryption_cache:
-            # In a real app, we might need a way to recover this or prompt user
-            raise ValueError(f"Encryption not initialized for user {user_id}")
-        return self._encryption_cache[user_id]
-
-    def _get_connection(self, db_path: str):
-        conn = sqlite3.connect(db_path)
+    def _get_connection(self):
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _init_system_db(self):
-        with self._get_connection(self.system_db_path) as conn:
+    def _init_db(self):
+        with self._get_connection() as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    salt BLOB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value BLOB
                 )
             """)
-
-    def get_user_db_path(self, user_id: str) -> str:
-        return os.path.join(self.data_dir, f"user_{user_id}.db")
-
-    def init_user_db(self, user_id: str):
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
+                    type TEXT NOT NULL,
                     account_number TEXT,
                     institution TEXT,
-                    balance REAL DEFAULT 0.0
+                    balance REAL DEFAULT 0.0,
+                    is_hidden BOOLEAN DEFAULT 0
                 )
             """)
             conn.execute("""
@@ -93,113 +74,111 @@ class DatabaseManager:
                     amount TEXT NOT NULL,
                     description TEXT,
                     category TEXT,
-                    raw_data TEXT,
                     account_id INTEGER,
-                    confidence REAL DEFAULT 0.0,
+                    source_account TEXT,
                     is_confirmed BOOLEAN DEFAULT 0,
+                    is_recurring BOOLEAN DEFAULT 0,
+                    raw_data TEXT,
+                    tags TEXT,
                     FOREIGN KEY (account_id) REFERENCES accounts (id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS category_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keyword TEXT UNIQUE NOT NULL,
+                    category TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0
+                )
+            """)
 
-    # User methods (System DB)
-    def create_user(self, user: User, salt: bytes):
-        with self._get_connection(self.system_db_path) as conn:
-            conn.execute(
-                "INSERT INTO users (id, username, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)",
-                (user.id, user.username, user.password_hash, salt, user.created_at)
-            )
-        self.init_user_db(user.id)
+    def set_encryption(self, password: str, salt: bytes = b'astra_static_salt'):
+        key = DataEncryption.generate_key(password, salt)
+        self.encryption = DataEncryption(key)
 
-    def get_user_by_username(self, username: str) -> Optional[dict]:
-        with self._get_connection(self.system_db_path) as conn:
-            row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-            if row:
-                user = User(id=row["id"], username=row["username"], password_hash=row["password_hash"],
-                            created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"])
-                return {"user": user, "salt": row["salt"]}
-        return None
+    def is_unlocked(self) -> bool:
+        return self.encryption is not None
 
-    # Transaction methods (User DB)
-    def add_transaction(self, user_id: str, tx: Transaction) -> int:
-        """Add a new transaction to the user's database with encrypted sensitive fields."""
-        encryptor = self._get_encryption(user_id)
-        description_enc = encryptor.encrypt(tx.description)
-        raw_data_enc = encryptor.encrypt(tx.raw_data)
-        amount_enc = encryptor.encrypt(str(tx.amount))
+    def _encrypt(self, data: str) -> str:
+        if not self.encryption:
+            raise ValueError("Database is locked. Please set vault key first.")
+        return self.encryption.encrypt(data)
 
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
+    def _decrypt(self, data: str) -> str:
+        if not self.encryption:
+            raise ValueError("Database is locked. Please set vault key first.")
+        return self.encryption.decrypt(data)
+
+    # Transaction methods
+    def add_transaction(self, tx: Transaction) -> int:
+        with self._get_connection() as conn:
             cursor = conn.execute(
-                """INSERT INTO transactions (date, amount, description, category, raw_data, account_id, confidence, is_confirmed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (tx.date, amount_enc, description_enc, tx.category, raw_data_enc, tx.account_id, tx.confidence, tx.is_confirmed)
+                """INSERT INTO transactions (date, amount, description, category, account_id, source_account, is_confirmed, is_recurring, raw_data, tags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (tx.date, self._encrypt(str(tx.amount)), self._encrypt(tx.description), tx.category,
+                 tx.account_id, tx.source_account, tx.is_confirmed, tx.is_recurring, self._encrypt(tx.raw_data), tx.tags)
             )
             return cursor.lastrowid
 
-    def get_transactions(self, user_id: str) -> List[Transaction]:
-        """Retrieve all transactions for a user, decrypting sensitive fields."""
-        encryptor = self._get_encryption(user_id)
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
+    def get_transactions(self) -> List[Transaction]:
+        with self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM transactions ORDER BY date DESC").fetchall()
-            transactions = []
-            for row in rows:
-                transactions.append(Transaction(
-                    id=row["id"],
-                    date=datetime.fromisoformat(row["date"]) if isinstance(row["date"], str) else row["date"],
-                    amount=float(encryptor.decrypt(row["amount"])),
-                    description=encryptor.decrypt(row["description"]),
-                    category=row["category"],
-                    raw_data=encryptor.decrypt(row["raw_data"]),
-                    account_id=row["account_id"],
-                    confidence=row["confidence"],
-                    is_confirmed=bool(row["is_confirmed"])
-                ))
-            return transactions
+            return [Transaction(
+                id=row["id"],
+                date=datetime.fromisoformat(row["date"]) if isinstance(row["date"], str) else row["date"],
+                amount=float(self._decrypt(row["amount"])),
+                description=self._decrypt(row["description"]),
+                category=row["category"],
+                account_id=row["account_id"],
+                source_account=row["source_account"],
+                is_confirmed=bool(row["is_confirmed"]),
+                is_recurring=bool(row["is_recurring"]),
+                raw_data=self._decrypt(row["raw_data"]),
+                tags=row["tags"]
+            ) for row in rows]
 
-    def update_transaction(self, user_id: str, tx: Transaction):
-        """Update an existing transaction in the user's database."""
-        encryptor = self._get_encryption(user_id)
-        description_enc = encryptor.encrypt(tx.description)
-        raw_data_enc = encryptor.encrypt(tx.raw_data)
-        amount_enc = encryptor.encrypt(str(tx.amount))
-
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
+    def update_transaction(self, tx: Transaction):
+        with self._get_connection() as conn:
             conn.execute(
                 """UPDATE transactions SET
-                   date = ?, amount = ?, description = ?, category = ?, raw_data = ?,
-                   account_id = ?, confidence = ?, is_confirmed = ?
+                   date = ?, amount = ?, description = ?, category = ?, account_id = ?,
+                   source_account = ?, is_confirmed = ?, is_recurring = ?, raw_data = ?, tags = ?
                    WHERE id = ?""",
-                (tx.date, amount_enc, description_enc, tx.category, raw_data_enc,
-                 tx.account_id, tx.confidence, tx.is_confirmed, tx.id)
+                (tx.date, self._encrypt(str(tx.amount)), self._encrypt(tx.description), tx.category,
+                 tx.account_id, tx.source_account, tx.is_confirmed, tx.is_recurring, self._encrypt(tx.raw_data), tx.tags, tx.id)
             )
 
-    # Account methods (User DB)
-    def add_account(self, user_id: str, acc: Account) -> int:
-        encryptor = self._get_encryption(user_id)
-        acc_num_enc = encryptor.encrypt(acc.account_number)
-
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
+    # Account methods
+    def add_account(self, acc: Account) -> int:
+        with self._get_connection() as conn:
             cursor = conn.execute(
-                "INSERT INTO accounts (name, account_number, institution, balance) VALUES (?, ?, ?, ?)",
-                (acc.name, acc_num_enc, acc.institution, acc.balance)
+                "INSERT INTO accounts (name, type, account_number, institution, balance, is_hidden) VALUES (?, ?, ?, ?, ?, ?)",
+                (acc.name, acc.type.value, self._encrypt(acc.account_number), acc.institution, acc.balance, acc.is_hidden)
             )
             return cursor.lastrowid
 
-    def get_accounts(self, user_id: str) -> List[Account]:
-        encryptor = self._get_encryption(user_id)
-        db_path = self.get_user_db_path(user_id)
-        with self._get_connection(db_path) as conn:
+    def get_accounts(self) -> List[Account]:
+        with self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM accounts").fetchall()
-            accounts = []
-            for row in rows:
-                accounts.append(Account(
-                    id=row["id"],
-                    name=row["name"],
-                    account_number=encryptor.decrypt(row["account_number"]),
-                    institution=row["institution"],
-                    balance=row["balance"]
-                ))
-            return accounts
+            return [Account(
+                id=row["id"],
+                name=row["name"],
+                type=AccountType(row["type"]),
+                account_number=self._decrypt(row["account_number"]),
+                institution=row["institution"],
+                balance=row["balance"],
+                is_hidden=bool(row["is_hidden"])
+            ) for row in rows]
+
+    # Rule methods
+    def add_rule(self, rule: CategoryRule):
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO category_rules (keyword, category, priority) VALUES (?, ?, ?)",
+                (rule.keyword, rule.category, rule.priority)
+            )
+
+    def get_rules(self) -> List[CategoryRule]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM category_rules ORDER BY priority DESC").fetchall()
+            return [CategoryRule(id=row["id"], keyword=row["keyword"], category=row["category"], priority=row["priority"]) for row in rows]

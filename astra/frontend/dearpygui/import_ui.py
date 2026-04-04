@@ -17,6 +17,14 @@ class ImportUI:
     def show(self):
         if not dpg.does_item_exist("import_modal"):
             self._create_modal()
+
+        # Refresh accounts list
+        accounts = self.api.get_accounts()
+        acc_names = [a.name for a in accounts]
+        dpg.configure_item("import_account_combo", items=acc_names)
+        if acc_names:
+            dpg.set_value("import_account_combo", acc_names[0])
+
         dpg.configure_item("import_modal", show=True)
 
     def _create_modal(self):
@@ -42,6 +50,8 @@ class ImportUI:
                         dpg.add_combo(tag="mapping_cat", width=200, callback=self._update_mapping)
 
                 dpg.add_input_text(label="Date Format (e.g. %Y-%m-%d)", tag="import_date_format", default_value="%Y-%m-%d")
+
+                dpg.add_combo(label="Import into Account", tag="import_account_combo", width=200)
 
                 dpg.add_separator()
                 dpg.add_text("Data Preview (First 10 rows)")
@@ -131,15 +141,19 @@ class ImportUI:
 
         mapping = {k: v for k, v in self.mapping.items() if v}
         date_format = dpg.get_value("import_date_format")
+        acc_name = dpg.get_value("import_account_combo")
 
         # Ensure required fields are mapped
         if not mapping.get("date") or not mapping.get("description") or not mapping.get("amount"):
             logger.error("Required fields (Date, Description, Amount) must be mapped.")
-            # We should probably show a UI warning here
             return
 
-        logger.info(f"Starting import of {self.selected_file}")
-        self.api.import_transactions(self.selected_file, mapping=mapping, date_format=date_format)
+        # Resolve account_id
+        accounts = self.api.get_accounts()
+        account = next((a for a in accounts if a.name == acc_name), None)
+
+        logger.info(f"Starting import of {self.selected_file} into {acc_name}")
+        self.api.import_transactions(self.selected_file, mapping=mapping, date_format=date_format, account_id=account.id if account else None)
 
         dpg.configure_item("import_modal", show=False)
         if self.on_import_complete:
