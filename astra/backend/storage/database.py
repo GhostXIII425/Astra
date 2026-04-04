@@ -42,6 +42,7 @@ class DatabaseManager:
         self.db_path = os.path.join(data_dir, "astra_local.db")
         self.encryption: Optional[DataEncryption] = None
         self._init_db()
+
         self._setup_default_encryption()
 
     def _setup_default_encryption(self):
@@ -100,6 +101,22 @@ class DatabaseManager:
                 )
             """)
 
+    def set_encryption(self, password: str, salt: bytes = b'astra_static_salt'):
+        key = DataEncryption.generate_key(password, salt)
+        self.encryption = DataEncryption(key)
+
+    def is_unlocked(self) -> bool:
+        return self.encryption is not None
+
+    def _encrypt(self, data: str) -> str:
+        if not self.encryption:
+            raise ValueError("Database is locked. Please set vault key first.")
+        return self.encryption.encrypt(data)
+
+    def _decrypt(self, data: str) -> str:
+        if not self.encryption:
+            raise ValueError("Database is locked. Please set vault key first.")
+        return self.encryption.decrypt(data)
     def set_encryption(self, password: str, salt: bytes):
         key = DataEncryption.generate_key(password, salt)
         self.encryption = DataEncryption(key)

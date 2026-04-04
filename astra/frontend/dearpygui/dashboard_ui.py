@@ -1,5 +1,6 @@
 import dearpygui.dearpygui as dpg
 import logging
+from datetime import datetime
 from astra.backend.storage.models import Transaction, Account, AccountType
 from astra.frontend.dearpygui.import_ui import ImportUI
 
@@ -11,6 +12,7 @@ class DashboardUI:
         self.on_logout = on_logout
         self._dark_mode = True
         self._parent = "main_window"
+        self.import_ui = ImportUI(self.api, on_import_complete=self._on_import_complete)
         self.import_ui = ImportUI(self.api, self._on_import_complete)
 
     def show(self, parent="main_window"):
@@ -51,6 +53,7 @@ class DashboardUI:
         with dpg.group():
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Manual Entry", callback=self._show_manual_entry)
+                dpg.add_button(label="Import Transactions...", callback=self.import_ui.show)
                 dpg.add_button(label="Import File", callback=self._show_file_picker)
                 dpg.add_loading_indicator(tag="import_spinner", show=False, radius=2)
                 dpg.add_text("", tag="import_status")
@@ -117,6 +120,7 @@ class DashboardUI:
     def _render_settings(self):
         dpg.add_button(label="Toggle Light/Dark Mode", callback=self._toggle_theme)
         dpg.add_separator()
+        dpg.add_button(label="Logout", callback=self.on_logout)
         dpg.add_button(label="Exit App", callback=dpg.stop_dearpygui)
 
     def _show_manual_entry(self):
@@ -136,10 +140,16 @@ class DashboardUI:
 
     def _save_manual_entry(self, sender, app_data):
         try:
+            acc_name = dpg.get_value("m_acc")
+            accounts = self.api.get_accounts()
+            account = next((a for a in accounts if a.name == acc_name), None)
+
             tx = Transaction(
                 date=datetime.fromisoformat(dpg.get_value("m_date")),
                 amount=dpg.get_value("m_amount"),
                 description=dpg.get_value("m_desc"),
+                category=dpg.get_value("m_cat") or "Uncategorized",
+                account_id=account.id if account else None
                 category=dpg.get_value("m_cat") or "Uncategorized"
             )
             self.api.add_manual_transaction(tx)
@@ -223,6 +233,10 @@ class DashboardUI:
             self.show(parent=self._parent)
         except Exception as e:
             self._update_global_status("Confirmation failed", color=(255, 0, 0))
+
+    def _on_import_complete(self, count):
+        self._update_global_status(f"Imported {count} transactions", color=(0, 255, 0))
+        self.show(parent=self._parent)
 
     def _update_global_status(self, message, color=(0, 255, 0)):
         if dpg.does_item_exist("global_status"):

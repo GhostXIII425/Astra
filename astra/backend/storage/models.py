@@ -23,6 +23,8 @@ class Transaction:
     is_recurring: bool = False
     raw_data: str = ""
     tags: str = "" # Comma separated tags
+    # Keep confidence for ML backward compatibility if needed, though rules use 1.0
+    confidence: float = 1.0
 
 @dataclass
 class Account:

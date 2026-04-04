@@ -11,6 +11,7 @@ def api():
         shutil.rmtree(test_dir)
     os.makedirs(test_dir)
     api = AstraAPI(test_dir)
+    api.unlock("test_vault_key")
     yield api
     shutil.rmtree(test_dir)
 
